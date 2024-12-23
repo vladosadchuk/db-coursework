@@ -11,7 +11,7 @@ export default hopeTheme({
 
   editLink: false,
   // Замінити на назву свого репозиторія
-  repo: "bohdanbulakh/databases-labs",
+  repo: "vladosadchuk/db-coursework",
 
   docsDir: "docs",
   // navbar
@@ -21,7 +21,7 @@ export default hopeTheme({
   sidebar,
 
   // Підставити рік та Ваше імʼя
-  footer: "ECL 2.0 Licensed | Copyright © 2024 Bohdan Bulakh ",
+  footer: "ECL 2.0 Licensed | Copyright © 2024 Vladyslav Osadchuk ",
 
   displayFooter: true,
 
