@@ -298,3 +298,629 @@ COMMIT;
 ```
 
 ## RESTfull сервіс для управління даними
+
+### Схема бази даних Prisma ORM
+
+```prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id                       String                    @id @default(uuid())
+  status                   String                    @db.VarChar(255)
+  name                     String                    @db.VarChar(255)
+  description              String                    @db.MediumText
+  projectMembers           ProjectMember[]
+  tasks                    Task[]
+  connectToProjectRequests ConnectToProjectRequest[]
+  roles                    Role[]
+
+  @@map("project")
+}
+
+model ProjectMember {
+  id                 String              @id @default(uuid())
+  project            Project             @relation(fields: [projectId], references: [id])
+  projectId          String              @map("project_id")
+  user               User                @relation(fields: [userId], references: [id])
+  userId             String              @map("user_id")
+  assignments        Assignment[]
+  projectMemberRoles ProjectMemberRole[]
+  taskComments       TaskComment[]
+
+  @@map("project_member")
+}
+
+model Task {
+  id           String        @id @default(uuid())
+  name         String        @db.VarChar(255)
+  description  String        @db.MediumText
+  status       String        @db.VarChar(255)
+  deadline     DateTime?     @db.DateTime(0)
+  project      Project       @relation(fields: [projectId], references: [id])
+  projectId    String        @map("project_id")
+  assignments  Assignment[]
+  taskComments TaskComment[]
+
+  @@map("task")
+}
+
+model TaskComment {
+  id              String        @id @default(uuid())
+  text            String        @db.MediumText
+  task            Task          @relation(fields: [taskId], references: [id])
+  taskId          String        @map("task_id")
+  projectMember   ProjectMember @relation(fields: [projectMemberId], references: [id])
+  projectMemberId String        @map("project_member_id")
+
+  @@map("task_comment")
+}
+
+model User {
+  id                       String                    @id @default(uuid())
+  username                 String                    @db.VarChar(255)
+  password                 String                    @db.VarChar(255)
+  email                    String                    @db.VarChar(320)
+  firstName                String                    @db.VarChar(255) @map("first_name")
+  lastName                 String                    @db.VarChar(255) @map("last_name")
+  avatar                   String?                   @db.MediumText
+  blocked                  Boolean                   @default(dbgenerated("b'0'")) @db.Bit(1)
+  projectMembers           ProjectMember[]
+  supportRequests          SupportRequest[]
+  connectToProjectRequests ConnectToProjectRequest[]
+
+  @@map("user")
+}
+
+model Assignment {
+  id              String        @id @default(uuid())
+  task            Task          @relation(fields: [taskId], references: [id])
+  taskId          String        @map("task_id")
+  projectMember   ProjectMember @relation(fields: [projectMemberId], references: [id])
+  projectMemberId String        @map("project_member_id")
+
+  @@map("assignment")
+}
+
+model SupportRequest {
+  id                     String                 @id @default(uuid())
+  user                   User                   @relation(fields: [userId], references: [id])
+  userId                 String                 @map("user_id")
+  topic                  String                 @db.VarChar(255)
+  description            String                 @db.MediumText
+  supportRequestsAnswers SupportRequestAnswer[]
+
+  @@map("suport_request")
+}
+
+model SupportRequestAnswer {
+  id               String         @id @default(uuid())
+  feedback         String         @db.MediumText
+  supportRequest   SupportRequest @relation(fields: [supportRequestId], references: [id])
+  supportRequestId String         @map("support_request_id")
+
+  @@map("support_request_answer")
+}
+
+model ConnectToProjectRequest {
+  id        String  @id @default(uuid())
+  user      User    @relation(fields: [userId], references: [id])
+  userId    String  @map("user_id")
+  project   Project @relation(fields: [projectId], references: [id])
+  projectId String  @map("project_id")
+
+  @@map("connect_to_project_request")
+}
+
+model Role {
+  id                 String              @id @default(uuid())
+  name               String              @db.VarChar(255)
+  project            Project             @relation(fields: [projectId], references: [id])
+  projectId          String              @map("project_id")
+  projectMemberRoles ProjectMemberRole[]
+  grants             Grant[]
+
+  @@map("role")
+}
+
+model ProjectMemberRole {
+  id              String        @id @default(uuid())
+  role            Role          @relation(fields: [roleId], references: [id])
+  roleId          String        @map("role_id")
+  projectMember   ProjectMember @relation(fields: [projectMemberId], references: [id])
+  projectMemberId String        @map("project_member_id")
+
+  @@map("project_member_role")
+}
+
+model Grant {
+  id         String @id @default(uuid())
+  permission String @db.VarChar(255)
+  role       Role   @relation(fields: [roleId], references: [id])
+  roleId     String @map("role_id")
+
+  @@map("grant")
+}
+```
+
+### Головний файл програми
+```typescript
+import {NestFactory} from '@nestjs/core';
+import {AppModule} from './app.module';
+import * as process from 'node:process';
+import {DocumentBuilder, SwaggerModule} from '@nestjs/swagger';
+import {ValidationPipe, VersioningType} from '@nestjs/common';
+
+async function bootstrap() {
+    const port = process.env.PORT ?? 3000;
+
+    const app = await NestFactory.create(AppModule);
+    app.useGlobalPipes(new ValidationPipe(
+        {
+            transform: true,
+            whitelist: true,
+        }
+    ));
+    app.enableVersioning({
+        type: VersioningType.URI,
+        defaultVersion: '1',
+    });
+
+    const swaggerConfig = new DocumentBuilder()
+        .setTitle('BranchOut API')
+        .setDescription('API for project management')
+        .setVersion('1')
+        .build();
+
+    const document = SwaggerModule.createDocument(app, swaggerConfig);
+    SwaggerModule.setup('api', app, document);
+
+    await app.listen(port, () => console.info(`Swagger: http://localhost:${port}/api`));
+}
+
+bootstrap();
+```
+### Головний модуль програми
+
+```typescript
+import {Module} from '@nestjs/common';
+import {PrismaModule} from './modules/prisma.module';
+import {RoleModule} from './modules/role.module';
+import {GrantModule} from "./modules/grant.module";
+
+@Module({
+    imports: [PrismaModule, RoleModule, GrantModule],
+})
+export class AppModule {
+}
+```
+
+### Підключення до бази даних
+
+#### Сервіс
+```typescript
+import { Injectable, OnModuleInit } from '@nestjs/common';
+import { PrismaClient } from '@prisma/client';
+
+@Injectable()
+export class PrismaService extends PrismaClient implements OnModuleInit {
+  async onModuleInit () {
+    await this.$connect();
+  }
+}
+```
+
+#### Модуль
+```typescript
+import { Global, Module } from '@nestjs/common';
+import { PrismaService } from '../database/prisma.service';
+
+@Global()
+@Module({
+  providers: [PrismaService],
+  exports: [PrismaService],
+})
+export class PrismaModule {}
+```
+
+### Role
+
+#### Контролер
+
+```typescript
+import {Body, Controller, Delete, Get, Param, Patch, Post} from '@nestjs/common';
+import {ApiBadRequestResponse, ApiOkResponse, ApiOperation, ApiParam, ApiTags} from '@nestjs/swagger';
+import {RoleService} from '../services/role.service';
+import {RoleResponse} from '../../responses/role.response';
+import {RoleByIdPipe} from '../pipes/role-by-id.pipe';
+import {CreateRoleDto} from '../dtos/create-role.dto';
+import {UpdateRoleDto} from '../dtos/update-role.dto';
+import {RoleBodyPipe} from '../pipes/role-body.pipe';
+
+@ApiTags('Role')
+@Controller('/roles')
+export class RoleController {
+    constructor(private readonly roleService: RoleService) {
+    }
+
+    @ApiOperation({summary: 'Get all roles'})
+    @ApiOkResponse({type: [RoleResponse]})
+    @Get()
+    getAll() {
+        return this.roleService.getAll();
+    }
+
+    @ApiOperation({summary: 'Get role by id'})
+    @ApiOkResponse({type: RoleResponse})
+    @ApiBadRequestResponse({description: 'Role with such id not found'})
+    @ApiParam({name: 'id', description: 'Id of the role to get'})
+    @Get('/:id')
+    get(@Param('id', RoleByIdPipe) id: string) {
+        return this.roleService.getById(id);
+    }
+
+    @ApiOperation({summary: 'Create role'})
+    @ApiOkResponse({type: RoleResponse})
+    @ApiBadRequestResponse({description: 'Invalid role data'})
+    @Post()
+    create(@Body(RoleBodyPipe) body: CreateRoleDto) {
+        return this.roleService.create(body);
+    }
+
+    @ApiOperation({summary: 'Update role by id'})
+    @ApiOkResponse({type: RoleResponse})
+    @ApiBadRequestResponse({description: 'Role with such id not found or invalid data'})
+    @ApiParam({name: 'id', description: 'Id of the role to update'})
+    @Patch('/:id')
+    update(
+        @Param('id', RoleByIdPipe) id: string,
+        @Body(RoleBodyPipe) body: UpdateRoleDto,
+    ) {
+        return this.roleService.updateById(id, body);
+    }
+
+    @ApiOperation({summary: 'Delete role by id'})
+    @ApiOkResponse({description: 'Role deleted successfully'})
+    @ApiBadRequestResponse({description: 'Role with such id not found'})
+    @ApiParam({name: 'id', description: 'Id of the role to delete'})
+    @Delete('/:id')
+    delete(@Param('id', RoleByIdPipe) id: string) {
+        return this.roleService.deleteById(id);
+    }
+}
+
+
+```
+
+#### Сервіс
+
+```typescript
+import { Injectable } from '@nestjs/common';
+import { PrismaService } from '../../database/prisma.service';
+import { Prisma } from '@prisma/client';
+
+@Injectable()
+export class RoleService {
+    constructor(private readonly prisma: PrismaService) {}
+
+    getAll() {
+        return this.prisma.role.findMany();
+    }
+
+    getById(id: string) {
+        return this.prisma.role.findUnique({ where: { id } });
+    }
+
+    create(data: Prisma.RoleUncheckedCreateInput) {
+        return this.prisma.role.create({ data });
+    }
+
+    updateById(id: string, data: Prisma.RoleUncheckedUpdateInput) {
+        return this.prisma.role.update({ where: { id }, data });
+    }
+
+    deleteById(id: string) {
+        return this.prisma.role.delete({ where: { id } });
+    }
+}
+```
+
+#### Пайп для валідації id
+
+```typescript
+import { Injectable, PipeTransform } from '@nestjs/common';
+import { RoleService } from '../services/role.service';
+import { InvalidEntityIdException } from '../../exceptions/invalid-entity-id.exception';
+
+@Injectable()
+export class RoleByIdPipe implements PipeTransform {
+    constructor(private readonly roleService: RoleService) {}
+
+    async transform(id: string) {
+        const role = await this.roleService.getById(id);
+        if (!role) {
+            throw new InvalidEntityIdException('Role');
+        }
+        return id;
+    }
+}
+```
+
+```typescript
+import {Injectable, PipeTransform} from '@nestjs/common';
+import {PrismaService} from '../../database/prisma.service';
+import {InvalidEntityIdException} from '../../exceptions/invalid-entity-id.exception';
+
+@Injectable()
+export class RoleBodyPipe implements PipeTransform {
+    constructor(private readonly prisma: PrismaService) {
+    }
+
+    async transform(value: any) {
+        if (value.projectId) {
+            const project = await this.prisma.project.findUnique({
+                where: {id: value.projectId},
+            });
+
+            if (!project) throw new InvalidEntityIdException('Project');
+        }
+        return value;
+    }
+}
+```
+
+#### DTO для створення
+
+```typescript
+import { ApiProperty } from '@nestjs/swagger';
+import { IsNotEmpty, IsUUID } from 'class-validator';
+
+export class CreateRoleDto {
+    @ApiProperty({ description: 'Name of the role' })
+    @IsNotEmpty({ message: 'Name cannot be empty' })
+    name: string;
+
+    @ApiProperty({ description: 'Project id associated with the role' })
+    @IsUUID()
+    projectId: string;
+}
+```
+
+#### DTO для оновлення
+
+```typescript
+import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsOptional, IsUUID } from 'class-validator';
+
+export class UpdateRoleDto {
+    @ApiPropertyOptional({ description: 'Name of the role' })
+    @IsOptional()
+    name?: string;
+
+    @ApiPropertyOptional({ description: 'Project id associated with the role' })
+    @IsOptional()
+    @IsUUID()
+    projectId?: string;
+}
+
+```
+
+#### Модуль
+
+```typescript
+import { Module } from '@nestjs/common';
+import { RoleController } from '../api/controllers/role.controller';
+import { RoleService } from '../api/services/role.service';
+import { RoleByIdPipe } from '../api/pipes/role-by-id.pipe';
+import { RoleBodyPipe } from '../api/pipes/role-body.pipe';
+
+@Module({
+    controllers: [RoleController],
+    providers: [RoleService, RoleByIdPipe, RoleBodyPipe],
+})
+export class RoleModule {}
+```
+
+### Grant
+
+#### Контролер
+
+```typescript
+import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
+import { ApiBadRequestResponse, ApiOkResponse, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
+import { GrantService } from '../services/grant.service';
+import { GrantResponse } from '../../responses/grant.response';
+import { GrantByIdPipe } from '../pipes/grant-by-id.pipe';
+import { CreateGrantDto } from '../dtos/create-grant.dto';
+import { UpdateGrantDto } from '../dtos/update-grant.dto';
+import { GrantBodyPipe } from '../pipes/grant-body.pipe';
+
+@ApiTags('Grant')
+@Controller('/grants')
+export class GrantController {
+    constructor(private readonly grantService: GrantService) {}
+
+    @ApiOperation({ summary: 'Get all grants' })
+    @ApiOkResponse({ type: [GrantResponse] })
+    @Get()
+    getAll() {
+        return this.grantService.getAll();
+    }
+
+    @ApiOperation({ summary: 'Get grant by id' })
+    @ApiOkResponse({ type: GrantResponse })
+    @ApiBadRequestResponse({ description: 'Grant with such id not found' })
+    @ApiParam({ name: 'id', description: 'Id of the grant to get' })
+    @Get('/:id')
+    get(@Param('id', GrantByIdPipe) id: string) {
+        return this.grantService.getById(id);
+    }
+
+    @ApiOperation({ summary: 'Create grant' })
+    @ApiOkResponse({ type: GrantResponse })
+    @ApiBadRequestResponse({ description: 'Invalid grant data' })
+    @Post()
+    create(@Body(GrantBodyPipe) body: CreateGrantDto) {
+        return this.grantService.create(body);
+    }
+
+    @ApiOperation({ summary: 'Update grant by id' })
+    @ApiOkResponse({ type: GrantResponse })
+    @ApiBadRequestResponse({ description: 'Grant with such id not found or invalid data' })
+    @ApiParam({ name: 'id', description: 'Id of the grant to update' })
+    @Patch('/:id')
+    update(
+        @Param('id', GrantByIdPipe) id: string,
+        @Body(GrantBodyPipe) body: UpdateGrantDto,
+    ) {
+        return this.grantService.updateById(id, body);
+    }
+
+    @ApiOperation({ summary: 'Delete grant by id' })
+    @ApiOkResponse({ description: 'Grant deleted successfully' })
+    @ApiBadRequestResponse({ description: 'Grant with such id not found' })
+    @ApiParam({ name: 'id', description: 'Id of the grant to delete' })
+    @Delete('/:id')
+    delete(@Param('id', GrantByIdPipe) id: string) {
+        return this.grantService.deleteById(id);
+    }
+}
+```
+
+#### Сервіс
+
+```typescript
+import { Injectable } from '@nestjs/common';
+import { PrismaService } from '../../database/prisma.service';
+import { Prisma } from '@prisma/client';
+
+@Injectable()
+export class GrantService {
+    constructor(private readonly prisma: PrismaService) {}
+
+    getAll() {
+        return this.prisma.grant.findMany();
+    }
+
+    getById(id: string) {
+        return this.prisma.grant.findUnique({ where: { id } });
+    }
+
+    create(data: Prisma.GrantUncheckedCreateInput) {
+        return this.prisma.grant.create({ data });
+    }
+
+    updateById(id: string, data: Prisma.GrantUncheckedUpdateInput) {
+        return this.prisma.grant.update({ where: { id }, data });
+    }
+
+    deleteById(id: string) {
+        return this.prisma.grant.delete({ where: { id } });
+    }
+}
+```
+
+#### Пайп для валідації id
+
+```typescript
+import { Injectable, PipeTransform } from '@nestjs/common';
+import { GrantService } from '../services/grant.service';
+import { InvalidEntityIdException } from '../../exceptions/invalid-entity-id.exception';
+
+@Injectable()
+export class GrantByIdPipe implements PipeTransform {
+    constructor(private readonly grantService: GrantService) {}
+
+    async transform(id: string) {
+        const grant = await this.grantService.getById(id);
+        if (!grant) {
+            throw new InvalidEntityIdException('Grant');
+        }
+        return id;
+    }
+}
+```
+
+```typescript
+import { Injectable, PipeTransform } from '@nestjs/common';
+import { PrismaService } from '../../database/prisma.service';
+import { InvalidEntityIdException } from '../../exceptions/invalid-entity-id.exception';
+
+@Injectable()
+export class GrantBodyPipe implements PipeTransform {
+    constructor(private readonly prisma: PrismaService) {}
+
+    async transform(value: any) {
+        if (value.projectId) {
+            const project = await this.prisma.project.findUnique({
+                where: { id: value.projectId },
+            });
+
+            if (!project) throw new InvalidEntityIdException('Project');
+        }
+        return value;
+    }
+}
+```
+
+#### DTO для створення
+
+```typescript
+import {ApiProperty} from '@nestjs/swagger';
+import {IsNotEmpty, IsString, IsUUID} from 'class-validator';
+
+export class CreateGrantDto {
+    @ApiProperty({description: 'Permission associated with the grant'})
+    @IsNotEmpty({message: 'Permission cannot be empty'})
+    @IsString()
+    permission: string;
+
+    @ApiProperty({description: 'Role ID associated with the grant'})
+    @IsNotEmpty({message: 'Role ID cannot be empty'})
+    @IsUUID()
+    roleId: string;
+}
+```
+
+#### DTO для оновлення
+
+```typescript
+import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsOptional, IsString, IsUUID } from 'class-validator';
+
+export class UpdateGrantDto {
+    @ApiPropertyOptional({ description: 'Permission associated with the grant' })
+    @IsOptional()
+    @IsString()
+    permission?: string;
+
+    @ApiPropertyOptional({ description: 'Role ID associated with the grant' })
+    @IsOptional()
+    @IsUUID()
+    roleId?: string;
+}
+
+
+```
+
+#### Модуль
+
+```typescript
+import { Module } from '@nestjs/common';
+import { GrantController } from '../api/controllers/grant.controller';
+import { GrantService } from '../api/services/grant.service';
+import { GrantByIdPipe } from '../api/pipes/grant-by-id.pipe';
+import { GrantBodyPipe } from '../api/pipes/grant-body.pipe';
+
+@Module({
+    controllers: [GrantController],
+    providers: [GrantService, GrantByIdPipe, GrantBodyPipe],
+})
+export class GrantModule {}
+```
